@@ -27,7 +27,8 @@ def get_connected_devices():
 def send_to_device(device_id, text):
     """Sends text to a specific Android device via ADB broadcast using stdin."""
     quoted_text = shlex.quote(text)
-    cmd_str = f"am broadcast -a ch.pete.adbclipboard.WRITE -n ch.pete.adbclipboard/.WriteReceiver -e text {quoted_text}"
+    # Updated to use the custom app's WriteReceiver
+    cmd_str = f"am broadcast -a com.example.clipboard.WRITE -n com.example.clipboard/.WriteReceiver -e text {quoted_text}"
     
     try:
         process = subprocess.Popen(
@@ -50,99 +51,13 @@ def send_to_device(device_id, text):
     except Exception as e:
         print(f"[{device_id}] Exception during send: {e}")
 
-import re
-
-def trigger_clipboard_write(device_id):
-    """
-    Triggers the clipboard write by tapping the floating icon.
-    Finds the window coordinates dynamically.
-    """
-    try:
-        # 1. Get PID of the app
-        pid_cmd = ["adb", "-s", device_id, "shell", "pidof", "ch.pete.adbclipboard"]
-        pid_result = subprocess.run(pid_cmd, capture_output=True, text=True)
-        pid = pid_result.stdout.strip()
-        
-        if not pid:
-            print(f"[{device_id}] App not running. Launching...")
-            subprocess.run(["adb", "-s", device_id, "shell", "monkey", "-p", "ch.pete.adbclipboard", "-c", "android.intent.category.LAUNCHER", "1"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            time.sleep(1)
-            # Try getting PID again
-            pid_result = subprocess.run(pid_cmd, capture_output=True, text=True)
-            pid = pid_result.stdout.strip()
-            if not pid:
-                print(f"[{device_id}] Failed to launch app.")
-                return False
-
-        # 2. Find window bounds using dumpsys
-        # We look for a window that matches the PID or package name and has a valid frame
-        dumpsys_cmd = ["adb", "-s", device_id, "shell", "dumpsys", "window", "windows"]
-        dumpsys_result = subprocess.run(dumpsys_cmd, capture_output=True, text=True)
-        
-        # Regex to find window block for our PID or package
-        # We look for "Window{... ch.pete.adbclipboard ...}" or similar, then the "Frames" line
-        # The output format is complex, so we'll try to find the specific window name usually associated with the overlay
-        # Based on logs, it might be "PopupWindow:..." or just associated with the PID
-        
-        lines = dumpsys_result.stdout.splitlines()
-        target_window_found = False
-        bounds = None
-        
-        current_window = None
-        
-        for line in lines:
-            line = line.strip()
-            if "Window{" in line and (pid in line or "ch.pete.adbclipboard" in line):
-                current_window = line
-                target_window_found = True
-                continue
-            
-            if target_window_found and "Frames:" in line:
-                # Format: Frames: parent=[0,81][1080,2196] display=[0,81][1080,2196] frame=[5,157][233,385]
-                match = re.search(r"frame=\[(\d+),(\d+)\]\[(\d+),(\d+)\]", line)
-                if match:
-                    left, top, right, bottom = map(int, match.groups())
-                    if right - left > 0 and bottom - top > 0:
-                        bounds = (left, top, right, bottom)
-                        break # Found a valid window
-        
-        if not bounds:
-            print(f"[{device_id}] Could not find window bounds for overlay.")
-            return False
-            
-        left, top, right, bottom = bounds
-        center_x = (left + right) // 2
-        center_y = (top + bottom) // 2
-        
-        print(f"[{device_id}] Tapping at {center_x}, {center_y} (Window: {left},{top} - {right},{bottom})")
-        
-        # 3. Tap the center
-        subprocess.run(["adb", "-s", device_id, "shell", "input", "tap", str(center_x), str(center_y)], check=False)
-        return True
-
-    except Exception as e:
-        print(f"[{device_id}] Error triggering write: {e}")
-        return False
-
 def read_from_device(device_id):
     """Reads clipboard content from a specific Android device."""
     try:
-        # 1. Trigger the clipboard write (Tap method)
-        if not trigger_clipboard_write(device_id):
-            # Fallback to broadcast if tap fails (though unlikely to work for background)
-            print(f"[{device_id}] Tap failed, trying broadcast...")
-            subprocess.run(
-                ["adb", "-s", device_id, "shell", "am", "broadcast", "-a", "ch.pete.adbclipboard.READ_CLIPBOARD", "-n", "ch.pete.adbclipboard/.ReadReceiver"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False
-            )
+        # The Accessibility Service automatically writes to this file
+        # /sdcard/Android/data/com.example.clipboard/files/clipboard.txt
         
-        # Give it a moment to write the file
-        time.sleep(0.5)
-
-        # 2. Read the file content
-        cmd = ["adb", "-s", device_id, "shell", "cat", "/sdcard/Android/data/ch.pete.adbclipboard/files/clipboard.txt"]
+        cmd = ["adb", "-s", device_id, "shell", "cat", "/sdcard/Android/data/com.example.clipboard/files/clipboard.txt"]
         result = subprocess.run(cmd, capture_output=True, text=True, check=False)
         
         if result.returncode == 0:
@@ -181,11 +96,12 @@ class LogcatMonitor(threading.Thread):
                     break
                 
                 # Check for specific keywords indicating a copy action
-                # "SemClipboardToastController" is for Samsung
-                # "ClipboardListener.showCopyToast" is generic Android
                 if "SemClipboardToastController" in line and "Copy toast is shown" in line:
                     clipboard_event_queue.put(self.device_id)
                 elif "ClipboardListener" in line and "showCopyToast" in line:
+                    clipboard_event_queue.put(self.device_id)
+                # Also listen for our own app's logs to confirm it saw the change
+                elif "ClipboardMonitor" in line and "Clipboard changed:" in line:
                     clipboard_event_queue.put(self.device_id)
                     
         except Exception as e:
@@ -195,8 +111,7 @@ class LogcatMonitor(threading.Thread):
 
 def main():
     print("Two-way Clipboard Sync Started (Mac <-> Android)...")
-    print("Ensure 'AdbClipboard' app is installed and open on your Android device.")
-    print("Monitoring for copy events to trigger auto-sync...")
+    print("Ensure 'Clipboard Sync' app is installed and Accessibility Service is enabled.")
     
     last_mac_clipboard = ""
     last_android_clipboard = ""
@@ -261,8 +176,8 @@ def main():
                             continue
 
                     # Check for rapid duplicate events (global debounce)
-                    if current_time - last_global_read_time < 2.0:
-                         print(f"[{event_device_id}] Ignoring rapid duplicate event (global debounce)")
+                    if current_time - last_global_read_time < 1.0:
+                         # print(f"[{event_device_id}] Ignoring rapid duplicate event (global debounce)")
                          continue
 
                     print(f"[{event_device_id}] Detected copy event! Syncing...")
@@ -277,7 +192,7 @@ def main():
                                 last_mac_clipboard = android_content
                                 last_android_clipboard = android_content
                                 last_global_read_time = current_time
-
+            
             except queue.Empty:
                 pass
             
