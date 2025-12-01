@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Clipboard Sync</string>
+    <string name="accessibility_service_description">Accessibility service to monitor clipboard changes and sync with Mac.</string>
+</resources>
