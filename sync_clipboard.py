@@ -217,6 +217,8 @@ def main():
 
     # Track last send time to avoid feedback loops
     last_send_time = {}
+    # Track last read time globally to debounce rapid events across duplicate device entries
+    last_global_read_time = 0
 
     try:
         while True:
@@ -250,11 +252,18 @@ def main():
                 while True:
                     event_device_id = clipboard_event_queue.get_nowait()
                     
+                    current_time = time.time()
+                    
                     # Check for feedback loop (ignore events shortly after we sent data)
                     if event_device_id in last_send_time:
-                        if time.time() - last_send_time[event_device_id] < 3.0:
+                        if current_time - last_send_time[event_device_id] < 3.0:
                             print(f"[{event_device_id}] Ignoring echo event (feedback loop protection)")
                             continue
+
+                    # Check for rapid duplicate events (global debounce)
+                    if current_time - last_global_read_time < 2.0:
+                         print(f"[{event_device_id}] Ignoring rapid duplicate event (global debounce)")
+                         continue
 
                     print(f"[{event_device_id}] Detected copy event! Syncing...")
                     
@@ -267,6 +276,8 @@ def main():
                                 pyperclip.copy(android_content)
                                 last_mac_clipboard = android_content
                                 last_android_clipboard = android_content
+                                last_global_read_time = current_time
+
             except queue.Empty:
                 pass
             
