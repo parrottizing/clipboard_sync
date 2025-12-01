@@ -215,6 +215,9 @@ def main():
         monitor.start()
         monitors[device] = monitor
 
+    # Track last send time to avoid feedback loops
+    last_send_time = {}
+
     try:
         while True:
             # Check for new devices or disconnected devices (basic handling)
@@ -236,6 +239,7 @@ def main():
                 if current_mac_clipboard.strip():
                     for device in current_devices:
                         send_to_device(device, current_mac_clipboard)
+                        last_send_time[device] = time.time()
                     last_mac_clipboard = current_mac_clipboard
                     last_android_clipboard = current_mac_clipboard 
 
@@ -245,6 +249,13 @@ def main():
                 # We use a non-blocking get
                 while True:
                     event_device_id = clipboard_event_queue.get_nowait()
+                    
+                    # Check for feedback loop (ignore events shortly after we sent data)
+                    if event_device_id in last_send_time:
+                        if time.time() - last_send_time[event_device_id] < 3.0:
+                            print(f"[{event_device_id}] Ignoring echo event (feedback loop protection)")
+                            continue
+
                     print(f"[{event_device_id}] Detected copy event! Syncing...")
                     
                     android_content = read_from_device(event_device_id)
