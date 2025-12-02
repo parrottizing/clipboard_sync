@@ -3263,6 +3263,7 @@ id notification_main_column
 id notification_main_column_container
 id off
 id on
+id openSettingsButton
 id open_search_bar_text_view
 id open_search_view_background
 id open_search_view_clear_button
@@ -3358,6 +3359,7 @@ id startToEnd
 id startVertical
 id staticLayout
 id staticPostLayout
+id statusText
 id stop
 id stretch
 id submenuarrow
@@ -3539,6 +3541,7 @@ layout abc_search_dropdown_item_icons_2line
 layout abc_search_view
 layout abc_select_dialog_material
 layout abc_tooltip
+layout activity_main
 layout custom_dialog
 layout design_bottom_navigation_item
 layout design_bottom_sheet_dialog
