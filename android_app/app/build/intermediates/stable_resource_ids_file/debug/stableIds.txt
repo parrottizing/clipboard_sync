@@ -2613,6 +2613,7 @@ com.example.clipboard:string/material_motion_easing_emphasized = 0x7f0e004a
 com.example.clipboard:color/material_personalized_color_surface = 0x7f050291
 com.example.clipboard:id/search_go_btn = 0x7f080158
 com.example.clipboard:color/material_personalized_color_secondary_text_inverse = 0x7f050290
+com.example.clipboard:xml/file_paths = 0x7f110000
 com.example.clipboard:dimen/m3_comp_radio_button_unselected_hover_state_layer_opacity = 0x7f06016a
 com.example.clipboard:dimen/m3_bottom_sheet_modal_elevation = 0x7f0600c4
 com.example.clipboard:integer/mtrl_tab_indicator_anim_duration_ms = 0x7f09003e

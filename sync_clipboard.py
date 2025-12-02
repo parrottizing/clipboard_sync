@@ -6,6 +6,10 @@ import sys
 import os
 import threading
 import queue
+import base64
+import tempfile
+from PIL import ImageGrab, Image
+from io import BytesIO
 
 # Global queue to communicate between threads
 clipboard_event_queue = queue.Queue()
@@ -24,10 +28,9 @@ def get_connected_devices():
     except subprocess.CalledProcessError:
         return []
 
-def send_to_device(device_id, text):
+def send_text_to_device(device_id, text):
     """Sends text to a specific Android device via ADB broadcast using stdin."""
     quoted_text = shlex.quote(text)
-    # Updated to use the custom app's WriteReceiver
     cmd_str = f"am broadcast -a com.example.clipboard.WRITE -n com.example.clipboard/.WriteReceiver -e text {quoted_text}"
     
     try:
@@ -42,38 +45,152 @@ def send_to_device(device_id, text):
         
         if process.returncode == 0:
             if "Error" in stderr or "inaccessible" in stderr:
-                 print(f"[{device_id}] Potential error sending: {stderr.strip()}")
+                 print(f"[{device_id}] Potential error sending text: {stderr.strip()}")
             else:
-                 print(f"[{device_id}] Sent to Android: {text[:30]}..." if len(text) > 30 else f"[{device_id}] Sent to Android: {text}")
+                 print(f"[{device_id}] Sent text to Android: {text[:30]}..." if len(text) > 30 else f"[{device_id}] Sent text to Android: {text}")
         else:
-            print(f"[{device_id}] ADB failed sending: {stderr.strip()}")
+            print(f"[{device_id}] ADB failed sending text: {stderr.strip()}")
             
     except Exception as e:
-        print(f"[{device_id}] Exception during send: {e}")
+        print(f"[{device_id}] Exception during text send: {e}")
+
+def send_image_to_device(device_id, image):
+    """Sends image to a specific Android device via ADB broadcast."""
+    try:
+        # Convert image to PNG bytes
+        img_byte_arr = BytesIO()
+        image.save(img_byte_arr, format='PNG')
+        img_bytes = img_byte_arr.getvalue()
+        
+        # Check size limit (10MB)
+        if len(img_bytes) > 10 * 1024 * 1024:
+            print(f"[{device_id}] Image too large ({len(img_bytes)} bytes), skipping")
+            return
+        
+        # Encode to Base64
+        base64_image = base64.b64encode(img_bytes).decode('utf-8')
+        
+        # Due to ADB command length limitations, we'll use adb push instead
+        # Create a temp file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as temp_file:
+            temp_file.write(f"image/png\n")
+            temp_file.write(f"clipboard_image.png\n")
+            temp_file.write(base64_image)
+            temp_path = temp_file.name
+        
+        try:
+            # Push the file to device
+            push_path = "/sdcard/clipboard_image_temp.txt"
+            subprocess.run(
+                ["adb", "-s", device_id, "push", temp_path, push_path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True
+            )
+            
+            # Read the file and broadcast via shell script
+            cmd = f"""
+            MIME_TYPE=$(sed -n '1p' {push_path})
+            IMAGE_DATA=$(tail -n +3 {push_path})
+            am broadcast -a com.example.clipboard.WRITE -n com.example.clipboard/.WriteReceiver -e mime_type "$MIME_TYPE" -e image_data "$IMAGE_DATA"
+            rm {push_path}
+            """
+            
+            result = subprocess.run(
+                ["adb", "-s", device_id, "shell", cmd],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            
+            if result.returncode == 0:
+                print(f"[{device_id}] Sent image to Android ({len(img_bytes)} bytes)")
+            else:
+                print(f"[{device_id}] Failed to send image: {result.stderr}")
+                
+        finally:
+            os.unlink(temp_path)
+            
+    except subprocess.TimeoutExpired:
+        print(f"[{device_id}] Timeout sending image")
+    except Exception as e:
+        print(f"[{device_id}] Exception during image send: {e}")
 
 def read_from_device(device_id):
-    """Reads clipboard content from a specific Android device."""
+    """Reads clipboard content (text or image) from a specific Android device."""
     try:
         # Step 1: Trigger the app to write clipboard to file
-        # We use the invisible MainActivity we just built
         trigger_cmd = ["adb", "-s", device_id, "shell", "am", "start", "-n", "com.example.clipboard/.MainActivity"]
         subprocess.run(trigger_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
         
         # Step 2: Wait briefly for the file to be written
         time.sleep(0.5)
         
-        # Step 3: Read the file content
-        # Note: Filename is clipboard_content.txt as per new Android app
-        read_cmd = ["adb", "-s", device_id, "shell", "cat", "/sdcard/Android/data/com.example.clipboard/files/clipboard_content.txt"]
-        result = subprocess.run(read_cmd, capture_output=True, text=True, check=False)
+        # Step 3: Check for image first
+        read_img_cmd = ["adb", "-s", device_id, "shell", "cat", "/sdcard/Android/data/com.example.clipboard/files/clipboard_image.txt"]
+        result_img = subprocess.run(read_img_cmd, capture_output=True, text=True, check=False)
         
-        if result.returncode == 0:
-            return result.stdout
-        else:
-            return None
-            
+        if result_img.returncode == 0 and result_img.stdout.strip():
+            # Parse image data: line 1 = MIME type, line 2 = filename, line 3+ = Base64
+            lines = result_img.stdout.strip().split('\n', 2)
+            if len(lines) >= 3:
+                mime_type = lines[0]
+                filename = lines[1]
+                base64_data = lines[2]
+                return {'type': 'image', 'mime_type': mime_type, 'filename': filename, 'data': base64_data}
+        
+        # Step 4: Check for text
+        read_txt_cmd = ["adb", "-s", device_id, "shell", "cat", "/sdcard/Android/data/com.example.clipboard/files/clipboard_content.txt"]
+        result_txt = subprocess.run(read_txt_cmd, capture_output=True, text=True, check=False)
+        
+        if result_txt.returncode == 0 and result_txt.stdout.strip():
+            return {'type': 'text', 'data': result_txt.stdout}
+        
+        return None
+        
     except Exception as e:
         print(f"[{device_id}] Exception during read: {e}")
+        return None
+
+def set_mac_clipboard_image(image):
+    """Sets an image to the Mac clipboard using osascript."""
+    try:
+        # Save image to temporary file
+        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as temp_file:
+            image.save(temp_file, format='PNG')
+            temp_path = temp_file.name
+        
+        try:
+            # Use osascript to set clipboard
+            script = f'set the clipboard to (read (POSIX file "{temp_path}") as «class PNGf»)'
+            subprocess.run(
+                ["osascript", "-e", script],
+                check=True,
+                capture_output=True
+            )
+            print(f"Image set to Mac clipboard")
+            return True
+        finally:
+            # Clean up temp file after a delay (osascript needs time to read it)
+            time.sleep(0.5)
+            try:
+                os.unlink(temp_path)
+            except:
+                pass
+                
+    except Exception as e:
+        print(f"Error setting Mac clipboard image: {e}")
+        return False
+
+def get_mac_clipboard_image():
+    """Gets an image from the Mac clipboard using PIL."""
+    try:
+        image = ImageGrab.grabclipboard()
+        if image is not None and isinstance(image, Image.Image):
+            return image
+        return None
+    except Exception as e:
+        # ImageGrab might not be available on all systems
         return None
 
 class LogcatMonitor(threading.Thread):
@@ -116,18 +233,47 @@ class LogcatMonitor(threading.Thread):
         finally:
             process.terminate()
 
+def compute_image_hash(image):
+    """Compute a simple hash of an image for comparison."""
+    if image is None:
+        return None
+    try:
+        # Convert to bytes and hash
+        img_byte_arr = BytesIO()
+        # Resize to small size for quick comparison
+        thumb = image.copy()
+        thumb.thumbnail((64, 64))
+        thumb.save(img_byte_arr, format='PNG')
+        return hash(img_byte_arr.getvalue())
+    except:
+        return None
+
 def main():
     print("Two-way Clipboard Sync Started (Mac <-> Android)...")
-    print("Ensure 'Clipboard Sync' app is installed and Accessibility Service is enabled.")
+    print("Text and Image support enabled.")
+    print("Ensure 'Clipboard Sync' app is installed on Android device.")
     
-    last_mac_clipboard = ""
-    last_android_clipboard = ""
-    
-    # Initialize last_mac_clipboard
+    # Install Pillow if not available
     try:
-        last_mac_clipboard = pyperclip.paste()
+        import PIL
+    except ImportError:
+        print("Installing Pillow...")
+        subprocess.run([sys.executable, "-m", "pip", "install", "Pillow"], check=True)
+        print("Pillow installed. Please restart the script.")
+        return
+    
+    last_mac_text = ""
+    last_android_clipboard = ""
+    last_mac_image_hash = None
+    
+    # Initialize last_mac_text
+    try:
+        last_mac_text = pyperclip.paste()
     except:
         pass
+    
+    # Initialize last_mac_image_hash
+    last_mac_image_hash = compute_image_hash(get_mac_clipboard_image())
 
     # Start logcat monitors for connected devices
     devices = get_connected_devices()
@@ -153,24 +299,34 @@ def main():
                     monitors[device] = monitor
             
             # --- Mac to Android ---
+            # Check for text changes
             try:
-                current_mac_clipboard = pyperclip.paste()
+                current_mac_text = pyperclip.paste()
             except Exception as e:
-                print(f"Error reading Mac clipboard: {e}")
-                current_mac_clipboard = last_mac_clipboard
+                current_mac_text = last_mac_text
 
-            if current_mac_clipboard != last_mac_clipboard:
-                if current_mac_clipboard.strip():
+            if current_mac_text != last_mac_text:
+                if current_mac_text.strip():
                     for device in current_devices:
-                        send_to_device(device, current_mac_clipboard)
+                        send_text_to_device(device, current_mac_text)
                         last_send_time[device] = time.time()
-                    last_mac_clipboard = current_mac_clipboard
-                    last_android_clipboard = current_mac_clipboard 
+                    last_mac_text = current_mac_text
+                    last_android_clipboard = current_mac_text
+            
+            # Check for image changes
+            current_mac_image = get_mac_clipboard_image()
+            current_mac_image_hash = compute_image_hash(current_mac_image)
+            
+            if current_mac_image_hash is not None and current_mac_image_hash != last_mac_image_hash:
+                # New image in clipboard
+                for device in current_devices:
+                    send_image_to_device(device, current_mac_image)
+                    last_send_time[device] = time.time()
+                last_mac_image_hash = current_mac_image_hash
 
             # --- Android to Mac (Event Driven) ---
             try:
                 # Check if any device reported a copy event
-                # We use a non-blocking get
                 while True:
                     event_device_id = clipboard_event_queue.get_nowait()
                     
@@ -184,21 +340,36 @@ def main():
 
                     # Check for rapid duplicate events (global debounce)
                     if current_time - last_global_read_time < 1.0:
-                         # print(f"[{event_device_id}] Ignoring rapid duplicate event (global debounce)")
                          continue
 
                     print(f"[{event_device_id}] Detected copy event! Syncing...")
                     
-                    android_content = read_from_device(event_device_id)
+                    clipboard_data = read_from_device(event_device_id)
                     
-                    if android_content is not None:
-                        if android_content != last_android_clipboard and android_content != current_mac_clipboard:
-                            if android_content.strip():
-                                print(f"[{event_device_id}] Received from Android: {android_content[:30]}..." if len(android_content) > 30 else f"[{event_device_id}] Received from Android: {android_content}")
-                                pyperclip.copy(android_content)
-                                last_mac_clipboard = android_content
-                                last_android_clipboard = android_content
-                                last_global_read_time = current_time
+                    if clipboard_data is not None:
+                        if clipboard_data['type'] == 'text':
+                            text_data = clipboard_data['data']
+                            if text_data != last_android_clipboard and text_data != current_mac_text:
+                                if text_data.strip():
+                                    print(f"[{event_device_id}] Received text from Android: {text_data[:30]}..." if len(text_data) > 30 else f"[{event_device_id}] Received text from Android: {text_data}")
+                                    pyperclip.copy(text_data)
+                                    last_mac_text = text_data
+                                    last_android_clipboard = text_data
+                                    last_global_read_time = current_time
+                        
+                        elif clipboard_data['type'] == 'image':
+                            try:
+                                # Decode Base64 image
+                                image_bytes = base64.b64decode(clipboard_data['data'])
+                                image = Image.open(BytesIO(image_bytes))
+                                
+                                # Set to Mac clipboard
+                                if set_mac_clipboard_image(image):
+                                    print(f"[{event_device_id}] Received image from Android: {clipboard_data['filename']} ({len(image_bytes)} bytes)")
+                                    last_mac_image_hash = compute_image_hash(image)
+                                    last_global_read_time = current_time
+                            except Exception as e:
+                                print(f"[{event_device_id}] Error processing image: {e}")
             
             except queue.Empty:
                 pass
