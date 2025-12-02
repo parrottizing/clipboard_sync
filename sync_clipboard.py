@@ -54,11 +54,18 @@ def send_to_device(device_id, text):
 def read_from_device(device_id):
     """Reads clipboard content from a specific Android device."""
     try:
-        # The Accessibility Service automatically writes to this file
-        # /sdcard/Android/data/com.example.clipboard/files/clipboard.txt
+        # Step 1: Trigger the app to write clipboard to file
+        # We use the invisible MainActivity we just built
+        trigger_cmd = ["adb", "-s", device_id, "shell", "am", "start", "-n", "com.example.clipboard/.MainActivity"]
+        subprocess.run(trigger_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
         
-        cmd = ["adb", "-s", device_id, "shell", "cat", "/sdcard/Android/data/com.example.clipboard/files/clipboard.txt"]
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        # Step 2: Wait briefly for the file to be written
+        time.sleep(0.5)
+        
+        # Step 3: Read the file content
+        # Note: Filename is clipboard_content.txt as per new Android app
+        read_cmd = ["adb", "-s", device_id, "shell", "cat", "/sdcard/Android/data/com.example.clipboard/files/clipboard_content.txt"]
+        result = subprocess.run(read_cmd, capture_output=True, text=True, check=False)
         
         if result.returncode == 0:
             return result.stdout

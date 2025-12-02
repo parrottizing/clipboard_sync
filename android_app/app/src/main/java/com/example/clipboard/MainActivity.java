@@ -1,62 +1,70 @@
 package com.example.clipboard;
 
+import android.app.Activity;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
-import android.content.Intent;
 import android.os.Bundle;
-import android.provider.Settings;
-import android.view.accessibility.AccessibilityManager;
-import android.widget.Button;
-import android.widget.TextView;
-import androidx.appcompat.app.AppCompatActivity;
-import java.util.List;
+import android.util.Log;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 
-public class MainActivity extends AppCompatActivity {
+public class MainActivity extends Activity {
 
-    private TextView statusText;
-    private Button openSettingsButton;
+    private static final String TAG = "ClipboardReadActivity";
+    private static final String FILENAME = "clipboard_content.txt";
+    private boolean hasProcessed = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_main);
-
-        statusText = findViewById(R.id.statusText);
-        openSettingsButton = findViewById(R.id.openSettingsButton);
-
-        openSettingsButton.setOnClickListener(v -> {
-            Intent intent = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS);
-            startActivity(intent);
-        });
+        // No setContentView needed for a transparent activity
     }
 
     @Override
-    protected void onResume() {
-        super.onResume();
-        updateStatus();
-    }
-
-    private void updateStatus() {
-        boolean isEnabled = isAccessibilityServiceEnabled();
-        
-        if (isEnabled) {
-            statusText.setText("✓ Accessibility Service is ENABLED\n\nClipboard sync is active!");
-            statusText.setTextColor(getResources().getColor(android.R.color.holo_green_dark));
-        } else {
-            statusText.setText("✗ Accessibility Service is DISABLED\n\nPlease enable the service to use clipboard sync.");
-            statusText.setTextColor(getResources().getColor(android.R.color.holo_red_dark));
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus && !hasProcessed) {
+            hasProcessed = true;
+            readClipboardAndWriteToFile();
+            finish();
         }
     }
 
-    private boolean isAccessibilityServiceEnabled() {
-        AccessibilityManager am = (AccessibilityManager) getSystemService(Context.ACCESSIBILITY_SERVICE);
-        List<android.accessibilityservice.AccessibilityServiceInfo> enabledServices = 
-            am.getEnabledAccessibilityServiceList(android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_ALL_MASK);
+    private void readClipboardAndWriteToFile() {
+        ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        if (clipboard == null) {
+            Log.e(TAG, "ClipboardManager is null");
+            return;
+        }
 
-        for (android.accessibilityservice.AccessibilityServiceInfo service : enabledServices) {
-            if (service.getId().contains(getPackageName())) {
-                return true;
+        if (!clipboard.hasPrimaryClip()) {
+            Log.i(TAG, "No primary clip");
+            return;
+        }
+
+        ClipData clip = clipboard.getPrimaryClip();
+        if (clip != null && clip.getItemCount() > 0) {
+            CharSequence text = clip.getItemAt(0).getText();
+            if (text != null) {
+                String clipboardText = text.toString();
+                Log.i(TAG, "Clipboard text found: " + clipboardText);
+                writeToFile(clipboardText);
+            } else {
+                Log.i(TAG, "Clipboard item text is null");
             }
         }
-        return false;
+    }
+
+    private void writeToFile(String data) {
+        File file = new File(getExternalFilesDir(null), FILENAME);
+        try (FileOutputStream fos = new FileOutputStream(file)) {
+            fos.write(data.getBytes(StandardCharsets.UTF_8));
+            Log.i(TAG, "Successfully wrote to file: " + file.getAbsolutePath());
+        } catch (IOException e) {
+            Log.e(TAG, "Error writing to file", e);
+        }
     }
 }

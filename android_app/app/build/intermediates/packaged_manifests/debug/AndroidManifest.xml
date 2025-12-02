@@ -21,29 +21,17 @@
         android:extractNativeLibs="false"
         android:label="Clipboard Sync"
         android:supportsRtl="true"
-        android:theme="@style/Theme.AppCompat.Light.NoActionBar" >
+        android:theme="@android:style/Theme.Translucent.NoTitleBar" >
         <activity
             android:name="com.example.clipboard.MainActivity"
-            android:exported="true" >
+            android:exported="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" >
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <service
-            android:name="com.example.clipboard.ClipboardMonitorService"
-            android:exported="true"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE" >
-            <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
-            </intent-filter>
-
-            <meta-data
-                android:name="android.accessibilityservice"
-                android:resource="@xml/accessibility_service_config" />
-        </service>
 
         <receiver
             android:name="com.example.clipboard.WriteReceiver"
