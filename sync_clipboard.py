@@ -70,8 +70,7 @@ def send_image_to_device(device_id, image):
         # Encode to Base64
         base64_image = base64.b64encode(img_bytes).decode('utf-8')
         
-        # Due to ADB command length limitations, we'll use adb push instead
-        # Create a temp file
+        # Create a temp file with image data
         with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as temp_file:
             temp_file.write(f"image/png\n")
             temp_file.write(f"clipboard_image.png\n")
@@ -79,8 +78,8 @@ def send_image_to_device(device_id, image):
             temp_path = temp_file.name
         
         try:
-            # Push the file to device
-            push_path = "/sdcard/clipboard_image_temp.txt"
+            # Push the file to device in a location WriteReceiver can read (app-specific storage)
+            push_path = "/sdcard/Android/data/com.example.clipboard/files/clipboard_image_from_mac.txt"
             subprocess.run(
                 ["adb", "-s", device_id, "push", temp_path, push_path],
                 stdout=subprocess.DEVNULL,
@@ -88,13 +87,8 @@ def send_image_to_device(device_id, image):
                 check=True
             )
             
-            # Read the file and broadcast via shell script
-            cmd = f"""
-            MIME_TYPE=$(sed -n '1p' {push_path})
-            IMAGE_DATA=$(tail -n +3 {push_path})
-            am broadcast -a com.example.clipboard.WRITE -n com.example.clipboard/.WriteReceiver -e mime_type "$MIME_TYPE" -e image_data "$IMAGE_DATA"
-            rm {push_path}
-            """
+            # Broadcast with just the file path - WriteReceiver will read the file
+            cmd = f'am broadcast -a com.example.clipboard.WRITE -n com.example.clipboard/.WriteReceiver -e image_file "{push_path}"'
             
             result = subprocess.run(
                 ["adb", "-s", device_id, "shell", cmd],
@@ -106,13 +100,15 @@ def send_image_to_device(device_id, image):
             if result.returncode == 0:
                 print(f"[{device_id}] Sent image to Android ({len(img_bytes)} bytes)")
             else:
-                print(f"[{device_id}] Failed to send image: {result.stderr}")
+                print(f"[{device_id}] Failed to send image broadcast: {result.stderr}")
                 
         finally:
             os.unlink(temp_path)
             
     except subprocess.TimeoutExpired:
         print(f"[{device_id}] Timeout sending image")
+    except Exception as e:
+        print(f"[{device_id}] Exception during image send: {e}")
     except Exception as e:
         print(f"[{device_id}] Exception during image send: {e}")
 

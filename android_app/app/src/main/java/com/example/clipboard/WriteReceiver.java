@@ -9,8 +9,10 @@ import android.net.Uri;
 import android.util.Base64;
 import android.util.Log;
 import androidx.core.content.FileProvider;
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.FileReader;
 import java.io.IOException;
 
 public class WriteReceiver extends BroadcastReceiver {
@@ -20,12 +22,20 @@ public class WriteReceiver extends BroadcastReceiver {
     public void onReceive(Context context, Intent intent) {
         if (intent != null && "com.example.clipboard.WRITE".equals(intent.getAction())) {
             
-            // Check for image data
+            // Check for image file path (new method)
+            String imageFilePath = intent.getStringExtra("image_file");
+            if (imageFilePath != null) {
+                Log.d(TAG, "Received image file path: " + imageFilePath);
+                handleImageFromFile(context, imageFilePath);
+                return;
+            }
+            
+            // Check for image data (old method, kept for compatibility)
             String imageData = intent.getStringExtra("image_data");
             String mimeType = intent.getStringExtra("mime_type");
             
             if (imageData != null && mimeType != null) {
-                Log.d(TAG, "Received image to write, MIME type: " + mimeType);
+                Log.d(TAG, "Received image data directly, MIME type: " + mimeType);
                 handleImageWrite(context, imageData, mimeType);
                 return;
             }
@@ -38,7 +48,58 @@ public class WriteReceiver extends BroadcastReceiver {
                 return;
             }
             
-            Log.w(TAG, "No text or image data in intent");
+            Log.w(TAG, "No text, image data, or image file in intent");
+        }
+    }
+    
+    private void handleImageFromFile(Context context, String filePath) {
+        BufferedReader reader = null;
+        try {
+            File imageFile = new File(filePath);
+            if (!imageFile.exists()) {
+                Log.e(TAG, "Image file does not exist: " + filePath);
+                return;
+            }
+            
+            reader = new BufferedReader(new FileReader(imageFile));
+            
+            // Read MIME type (line 1)
+            String mimeType = reader.readLine();
+            if (mimeType == null) {
+                Log.e(TAG, "Could not read MIME type from file");
+                return;
+            }
+            
+            // Skip filename (line 2)
+            reader.readLine();
+            
+            // Read Base64 data (rest of file)
+            StringBuilder base64Data = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) {
+                base64Data.append(line);
+            }
+            
+            Log.i(TAG, "Read image from file: " + mimeType + ", data length: " + base64Data.length());
+            
+            // Process the image
+            handleImageWrite(context, base64Data.toString(), mimeType);
+            
+            // Clean up the file
+            if (imageFile.delete()) {
+                Log.d(TAG, "Deleted temp image file");
+            }
+            
+        } catch (IOException e) {
+            Log.e(TAG, "Error reading image file", e);
+        } finally {
+            if (reader != null) {
+                try {
+                    reader.close();
+                } catch (IOException e) {
+                    // Ignore
+                }
+            }
         }
     }
     
@@ -60,6 +121,8 @@ public class WriteReceiver extends BroadcastReceiver {
             // Decode Base64 to byte array
             byte[] imageBytes = Base64.decode(base64Data, Base64.NO_WRAP);
             
+            Log.i(TAG, "Decoded image: " + imageBytes.length + " bytes");
+            
             // Determine file extension from MIME type
             String extension = getExtensionFromMimeType(mimeType);
             
@@ -80,7 +143,7 @@ public class WriteReceiver extends BroadcastReceiver {
                 fos.flush();
             }
             
-            Log.i(TAG, "Image written to temp file: " + imageFile.getAbsolutePath() + ", size: " + imageBytes.length);
+            Log.i(TAG, "Image written to temp file: " + imageFile.getAbsolutePath());
             
             // Create content URI using FileProvider
             Uri contentUri = FileProvider.getUriForFile(
