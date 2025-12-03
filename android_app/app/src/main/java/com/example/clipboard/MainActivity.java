@@ -23,8 +23,8 @@ public class MainActivity extends Activity {
 
     private static final String TAG = "ClipboardReadActivity";
     private static final String TEXT_FILENAME = "clipboard_content.txt";
-    private static final String IMAGE_FILENAME = "clipboard_image.txt";
-    private static final int MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB limit
+    private static final String IMAGE_META_FILENAME = "clipboard_image_meta.txt";
+    private static final String IMAGE_DATA_FILENAME = "clipboard_image.bin";
     private boolean hasProcessed = false;
 
     @Override
@@ -101,32 +101,22 @@ public class MainActivity extends Activity {
                 return;
             }
             
-            ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-            byte[] data = new byte[16384];
-            int nRead;
-            int totalSize = 0;
-            
-            while ((nRead = inputStream.read(data, 0, data.length)) != -1) {
-                totalSize += nRead;
-                if (totalSize > MAX_IMAGE_SIZE) {
-                    Log.w(TAG, "Image too large (>" + MAX_IMAGE_SIZE + " bytes), skipping");
-                    inputStream.close();
-                    return;
+            File dataFile = new File(getExternalFilesDir(null), IMAGE_DATA_FILENAME);
+            try (FileOutputStream fos = new FileOutputStream(dataFile)) {
+                byte[] buffer = new byte[8192];
+                int len;
+                while ((len = inputStream.read(buffer)) != -1) {
+                    fos.write(buffer, 0, len);
                 }
-                buffer.write(data, 0, nRead);
+                fos.flush();
             }
-            
             inputStream.close();
-            buffer.flush();
             
-            byte[] imageBytes = buffer.toByteArray();
-            String base64Image = Base64.encodeToString(imageBytes, Base64.NO_WRAP);
+            // Write metadata to separate file
+            String metaData = mimeType + "\n" + (filename != null ? filename : "image");
+            writeMetaToFile(metaData);
             
-            // Write metadata and Base64 data to file
-            String imageData = mimeType + "\n" + (filename != null ? filename : "image") + "\n" + base64Image;
-            writeImageToFile(imageData);
-            
-            Log.i(TAG, "Successfully processed image: " + mimeType + ", size: " + imageBytes.length + " bytes");
+            Log.i(TAG, "Successfully processed image: " + mimeType + ", saved to " + dataFile.getAbsolutePath());
             
         } catch (IOException e) {
             Log.e(TAG, "Error reading image from URI", e);
@@ -169,13 +159,13 @@ public class MainActivity extends Activity {
         }
     }
     
-    private void writeImageToFile(String data) {
-        File file = new File(getExternalFilesDir(null), IMAGE_FILENAME);
+    private void writeMetaToFile(String data) {
+        File file = new File(getExternalFilesDir(null), IMAGE_META_FILENAME);
         try (FileOutputStream fos = new FileOutputStream(file)) {
             fos.write(data.getBytes(StandardCharsets.UTF_8));
-            Log.i(TAG, "Successfully wrote image to file: " + file.getAbsolutePath());
+            Log.i(TAG, "Successfully wrote image metadata to file: " + file.getAbsolutePath());
         } catch (IOException e) {
-            Log.e(TAG, "Error writing image to file", e);
+            Log.e(TAG, "Error writing image metadata to file", e);
         }
     }
 }

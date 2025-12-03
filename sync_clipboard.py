@@ -138,33 +138,56 @@ def send_image_to_device(device_id, image):
 def read_from_device(device_id):
     """Reads clipboard content (text or image) from a specific Android device."""
     try:
+        # Step 0: Clean up old files to avoid stale data
+        subprocess.run(["adb", "-s", device_id, "shell", "rm", "/sdcard/Android/data/com.example.clipboard/files/clipboard_content.txt"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["adb", "-s", device_id, "shell", "rm", "/sdcard/Android/data/com.example.clipboard/files/clipboard_image_meta.txt"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["adb", "-s", device_id, "shell", "rm", "/sdcard/Android/data/com.example.clipboard/files/clipboard_image.bin"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
         # Step 1: Trigger the app to write clipboard to file
         trigger_cmd = ["adb", "-s", device_id, "shell", "am", "start", "-n", "com.example.clipboard/.MainActivity"]
         subprocess.run(trigger_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
         
-        # Step 2: Wait briefly for the file to be written
-        time.sleep(0.5)
+        # Step 2: Poll for files (wait up to 5 seconds)
+        start_time = time.time()
+        while time.time() - start_time < 5:
+            # Check for image metadata
+            read_meta_cmd = ["adb", "-s", device_id, "shell", "cat", "/sdcard/Android/data/com.example.clipboard/files/clipboard_image_meta.txt"]
+            result_meta = subprocess.run(read_meta_cmd, capture_output=True, text=True, check=False)
+            
+            if result_meta.returncode == 0 and result_meta.stdout.strip():
+                # Found image metadata!
+                lines = result_meta.stdout.strip().split('\n', 1)
+                if len(lines) >= 1:
+                    mime_type = lines[0]
+                    filename = lines[1] if len(lines) > 1 else "image"
+                    
+                    # Pull the image file
+                    with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+                        temp_path = temp_file.name
+                    
+                    pull_cmd = ["adb", "-s", device_id, "pull", "/sdcard/Android/data/com.example.clipboard/files/clipboard_image.bin", temp_path]
+                    subprocess.run(pull_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+                    
+                    # Read image data from temp file
+                    with open(temp_path, "rb") as f:
+                        image_data = f.read()
+                    
+                    # Clean up temp file
+                    os.unlink(temp_path)
+                    
+                    return {'type': 'image', 'mime_type': mime_type, 'filename': filename, 'data': image_data}
+            
+            # Check for text
+            read_txt_cmd = ["adb", "-s", device_id, "shell", "cat", "/sdcard/Android/data/com.example.clipboard/files/clipboard_content.txt"]
+            result_txt = subprocess.run(read_txt_cmd, capture_output=True, text=True, check=False)
+            
+            if result_txt.returncode == 0 and result_txt.stdout.strip():
+                return {'type': 'text', 'data': result_txt.stdout}
+            
+            # Wait a bit before retrying
+            time.sleep(0.2)
         
-        # Step 3: Check for image first
-        read_img_cmd = ["adb", "-s", device_id, "shell", "cat", "/sdcard/Android/data/com.example.clipboard/files/clipboard_image.txt"]
-        result_img = subprocess.run(read_img_cmd, capture_output=True, text=True, check=False)
-        
-        if result_img.returncode == 0 and result_img.stdout.strip():
-            # Parse image data: line 1 = MIME type, line 2 = filename, line 3+ = Base64
-            lines = result_img.stdout.strip().split('\n', 2)
-            if len(lines) >= 3:
-                mime_type = lines[0]
-                filename = lines[1]
-                base64_data = lines[2]
-                return {'type': 'image', 'mime_type': mime_type, 'filename': filename, 'data': base64_data}
-        
-        # Step 4: Check for text
-        read_txt_cmd = ["adb", "-s", device_id, "shell", "cat", "/sdcard/Android/data/com.example.clipboard/files/clipboard_content.txt"]
-        result_txt = subprocess.run(read_txt_cmd, capture_output=True, text=True, check=False)
-        
-        if result_txt.returncode == 0 and result_txt.stdout.strip():
-            return {'type': 'text', 'data': result_txt.stdout}
-        
+        print(f"[{device_id}] Timed out waiting for clipboard data")
         return None
         
     except Exception as e:
@@ -379,8 +402,8 @@ def main():
                         
                         elif clipboard_data['type'] == 'image':
                             try:
-                                # Decode Base64 image
-                                image_bytes = base64.b64decode(clipboard_data['data'])
+                                # Load image from raw bytes
+                                image_bytes = clipboard_data['data']
                                 image = Image.open(BytesIO(image_bytes))
                                 
                                 # Check for duplicate image from Android

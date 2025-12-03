@@ -21,6 +21,7 @@
         android:extractNativeLibs="false"
         android:label="Clipboard Sync"
         android:supportsRtl="true"
+        android:testOnly="true"
         android:theme="@android:style/Theme.Translucent.NoTitleBar" >
         <activity
             android:name="com.example.clipboard.MainActivity"

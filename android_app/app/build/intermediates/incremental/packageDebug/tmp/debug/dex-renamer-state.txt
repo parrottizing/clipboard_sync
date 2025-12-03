@@ -1,10 +1,10 @@
-#Tue Dec 02 22:30:08 IST 2025
-base.2=/Users/gumlet/Documents/Scripst/clipboard_sync/android_app/app/build/intermediates/dex/debug/mergeProjectDexDebug/7/classes.dex
-path.2=7/classes.dex
-base.1=/Users/gumlet/Documents/Scripst/clipboard_sync/android_app/app/build/intermediates/dex/debug/mergeProjectDexDebug/0/classes.dex
-path.1=0/classes.dex
+#Wed Dec 03 16:38:39 IST 2025
 base.0=/Users/gumlet/Documents/Scripst/clipboard_sync/android_app/app/build/intermediates/dex/debug/mergeExtDexDebug/classes.dex
-renamed.2=classes3.dex
-renamed.1=classes2.dex
-renamed.0=classes.dex
+base.1=/Users/gumlet/Documents/Scripst/clipboard_sync/android_app/app/build/intermediates/dex/debug/mergeProjectDexDebug/0/classes.dex
+base.2=/Users/gumlet/Documents/Scripst/clipboard_sync/android_app/app/build/intermediates/dex/debug/mergeProjectDexDebug/7/classes.dex
 path.0=classes.dex
+path.1=0/classes.dex
+path.2=7/classes.dex
+renamed.0=classes.dex
+renamed.1=classes2.dex
+renamed.2=classes3.dex
