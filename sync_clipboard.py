@@ -15,16 +15,39 @@ from io import BytesIO
 clipboard_event_queue = queue.Queue()
 
 def get_connected_devices():
-    """Returns a list of connected device IDs."""
+    """Returns a list of unique connected device IDs."""
     try:
         output = subprocess.check_output(["adb", "devices"]).decode("utf-8")
-        devices = []
+        raw_devices = []
         for line in output.splitlines()[1:]:
             if line.strip() and "device" in line:
                 parts = line.split()
                 if parts[1] == "device":
-                    devices.append(parts[0])
-        return devices
+                    raw_devices.append(parts[0])
+
+        unique_devices = []
+        seen_serials = set()
+
+        for device_id in raw_devices:
+            try:
+                # Get real serial number to handle duplicates (e.g. IP vs mDNS)
+                serial = subprocess.check_output(
+                    ["adb", "-s", device_id, "shell", "getprop", "ro.serialno"],
+                    timeout=5
+                ).decode("utf-8").strip()
+
+                if serial and serial not in seen_serials:
+                    seen_serials.add(serial)
+                    unique_devices.append(device_id)
+                elif serial in seen_serials:
+                    # print(f"Skipping duplicate device handle {device_id} for serial {serial}")
+                    pass
+            except Exception as e:
+                print(f"Warning: Could not get serial for {device_id}: {e}")
+                # If we can't get serial, keep it to be safe
+                unique_devices.append(device_id)
+        
+        return unique_devices
     except subprocess.CalledProcessError:
         return []
 
@@ -261,6 +284,7 @@ def main():
     last_mac_text = ""
     last_android_clipboard = ""
     last_mac_image_hash = None
+    last_android_image_hash = None
     
     # Initialize last_mac_text
     try:
@@ -359,10 +383,17 @@ def main():
                                 image_bytes = base64.b64decode(clipboard_data['data'])
                                 image = Image.open(BytesIO(image_bytes))
                                 
+                                # Check for duplicate image from Android
+                                current_image_hash = compute_image_hash(image)
+                                if current_image_hash == last_android_image_hash:
+                                    print(f"[{event_device_id}] Ignoring duplicate image event from Android")
+                                    continue
+
                                 # Set to Mac clipboard
                                 if set_mac_clipboard_image(image):
                                     print(f"[{event_device_id}] Received image from Android: {clipboard_data['filename']} ({len(image_bytes)} bytes)")
-                                    last_mac_image_hash = compute_image_hash(image)
+                                    last_mac_image_hash = current_image_hash
+                                    last_android_image_hash = current_image_hash
                                     last_global_read_time = current_time
                             except Exception as e:
                                 print(f"[{event_device_id}] Error processing image: {e}")
