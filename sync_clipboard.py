@@ -8,7 +8,7 @@ import threading
 import queue
 import base64
 import tempfile
-from PIL import ImageGrab, Image
+from PIL import ImageGrab, Image, ImageOps
 from io import BytesIO
 
 # Global queue to communicate between threads
@@ -405,6 +405,12 @@ def main():
                                 # Load image from raw bytes
                                 image_bytes = clipboard_data['data']
                                 image = Image.open(BytesIO(image_bytes))
+                                
+                                # Apply EXIF orientation
+                                try:
+                                    image = ImageOps.exif_transpose(image)
+                                except Exception as e:
+                                    print(f"[{event_device_id}] Warning: Could not apply EXIF orientation: {e}")
                                 
                                 # Check for duplicate image from Android
                                 current_image_hash = compute_image_hash(image)
