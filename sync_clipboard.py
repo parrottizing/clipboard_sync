@@ -85,8 +85,8 @@ def send_image_to_device(device_id, image):
         image.save(img_byte_arr, format='PNG')
         img_bytes = img_byte_arr.getvalue()
         
-        # Check size limit (10MB)
-        if len(img_bytes) > 10 * 1024 * 1024:
+        # Check size limit (50MB)
+        if len(img_bytes) > 50 * 1024 * 1024:
             print(f"[{device_id}] Image too large ({len(img_bytes)} bytes), skipping")
             return
         
@@ -224,15 +224,72 @@ def set_mac_clipboard_image(image):
         print(f"Error setting Mac clipboard image: {e}")
         return False
 
-def get_mac_clipboard_image():
-    """Gets an image from the Mac clipboard using PIL."""
+def get_finder_selection():
+    """Gets the path of the currently selected file in Finder using AppleScript."""
     try:
-        image = ImageGrab.grabclipboard()
-        if image is not None and isinstance(image, Image.Image):
-            return image
+        cmd = """
+        tell application "Finder"
+            if selection is not {} then
+                set sel to selection
+                set p to POSIX path of (item 1 of sel as alias)
+                return p
+            end if
+        end tell
+        """
+        result = subprocess.run(["osascript", "-e", cmd], capture_output=True, text=True)
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+def get_mac_clipboard_image():
+    """Gets an image from the Mac clipboard using PIL or Finder selection."""
+    try:
+        content = ImageGrab.grabclipboard()
+        text_content = ""
+        try:
+            text_content = pyperclip.paste().strip()
+        except:
+            pass
+            
+        # Check if we have a filename in text, which suggests a Finder copy
+        if text_content and any(text_content.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp']):
+            # Try to get the actual file from Finder selection
+            finder_path = get_finder_selection()
+            if finder_path:
+                # Check if the selected file matches the text (either full path or filename)
+                if finder_path == text_content or os.path.basename(finder_path) == text_content:
+                    if os.path.isfile(finder_path):
+                        try:
+                            image = Image.open(finder_path)
+                            image.load()
+                            return image
+                        except:
+                            pass
+
+        # Case 1: Direct image data (e.g. copied from browser or image editor)
+        if isinstance(content, Image.Image):
+            return content
+            
+        # Case 2: File paths (e.g. copied from Finder, if ImageGrab supports it)
+        elif isinstance(content, list) and content:
+            # Check if the first item is a valid image file
+            file_path = content[0]
+            if os.path.isfile(file_path):
+                try:
+                    image = Image.open(file_path)
+                    # Force load the image data so we can close the file
+                    image.load()
+                    return image
+                except Exception:
+                    # Not an image file or cannot open
+                    pass
+                    
         return None
     except Exception as e:
         # ImageGrab might not be available on all systems
+        print(f"Error getting Mac clipboard image: {e}")
         return None
 
 class LogcatMonitor(threading.Thread):
@@ -342,23 +399,12 @@ def main():
                     monitors[device] = monitor
             
             # --- Mac to Android ---
-            # Check for text changes
-            try:
-                current_mac_text = pyperclip.paste()
-            except Exception as e:
-                current_mac_text = last_mac_text
-
-            if current_mac_text != last_mac_text:
-                if current_mac_text.strip():
-                    for device in current_devices:
-                        send_text_to_device(device, current_mac_text)
-                        last_send_time[device] = time.time()
-                    last_mac_text = current_mac_text
-                    last_android_clipboard = current_mac_text
+            # --- Mac to Android ---
             
-            # Check for image changes
+            # Check for image changes FIRST
             current_mac_image = get_mac_clipboard_image()
             current_mac_image_hash = compute_image_hash(current_mac_image)
+            image_sent = False
             
             if current_mac_image_hash is not None and current_mac_image_hash != last_mac_image_hash:
                 # New image in clipboard
@@ -366,6 +412,31 @@ def main():
                     send_image_to_device(device, current_mac_image)
                     last_send_time[device] = time.time()
                 last_mac_image_hash = current_mac_image_hash
+                image_sent = True
+
+            # Check for text changes
+            try:
+                current_mac_text = pyperclip.paste()
+            except Exception as e:
+                current_mac_text = last_mac_text
+
+            if current_mac_text != last_mac_text:
+                should_send_text = True
+                
+                # If we just sent an image, check if the text is likely the filename
+                if image_sent:
+                    if any(current_mac_text.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp']):
+                         should_send_text = False
+                         print(f"Skipping text send because it looks like the filename of the image just sent: {current_mac_text}")
+
+                if should_send_text and current_mac_text.strip():
+                    for device in current_devices:
+                        send_text_to_device(device, current_mac_text)
+                        last_send_time[device] = time.time()
+                    last_android_clipboard = current_mac_text
+                
+                # Always update last_mac_text so we don't send it next time
+                last_mac_text = current_mac_text
 
             # --- Android to Mac (Event Driven) ---
             try:
