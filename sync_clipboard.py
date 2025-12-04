@@ -10,6 +10,7 @@ import base64
 import tempfile
 from PIL import ImageGrab, Image, ImageOps
 from io import BytesIO
+import urllib.parse
 
 # Global queue to communicate between threads
 clipboard_event_queue = queue.Queue()
@@ -285,7 +286,59 @@ def get_mac_clipboard_image():
                 except Exception:
                     # Not an image file or cannot open
                     pass
-                    
+
+        # Case 3: Check for file:// URL in text content (e.g. Telegram)
+        # Try text from pyperclip first
+        potential_urls = []
+        if text_content:
+            potential_urls.append(text_content)
+        
+        # Also try to get clipboard as text via osascript if pyperclip failed or just to be safe
+        try:
+            cmd = 'osascript -e "get the clipboard as text"'
+            result = subprocess.run(shlex.split(cmd), capture_output=True, text=True)
+            if result.returncode == 0 and result.stdout.strip():
+                potential_urls.append(result.stdout.strip())
+        except:
+            pass
+
+        for url_text in potential_urls:
+            if url_text.strip().startswith('file://'):
+                try:
+                    parsed = urllib.parse.urlparse(url_text.strip())
+                    file_path = urllib.parse.unquote(parsed.path)
+                    if os.path.isfile(file_path):
+                        # Check extension
+                        if any(file_path.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp']):
+                            try:
+                                image = Image.open(file_path)
+                                image.load()
+                                return image
+                            except:
+                                pass
+                except:
+                    pass
+
+        # Case 4: Check for '«class furl»' (File URL) directly via AppleScript
+        # This is common for apps like Telegram that put a file reference on the clipboard
+        try:
+            # Get the POSIX path of the file URL directly
+            cmd = 'osascript -e "get POSIX path of (the clipboard as «class furl»)"'
+            result = subprocess.run(shlex.split(cmd), capture_output=True, text=True)
+            if result.returncode == 0 and result.stdout.strip():
+                furl_path = result.stdout.strip()
+                if os.path.isfile(furl_path):
+                     # Check extension
+                    if any(furl_path.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp']):
+                        try:
+                            image = Image.open(furl_path)
+                            image.load()
+                            return image
+                        except:
+                            pass
+        except:
+            pass
+
         return None
     except Exception as e:
         # ImageGrab might not be available on all systems
